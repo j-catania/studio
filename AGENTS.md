@@ -28,14 +28,15 @@ Ce document décrit les contraintes techniques, les choix d'architecture et les 
 
 Toute logique bas niveau ajoutée doit respecter le formatage attendu par le firmware Lunii :
 
-- **Lunii V2 :**
-  - Dossier de données : `.content` ou `content`
-  - Index binaire : `md`
-  - Audio : MP3 ou Vorbis échantillonné à 44,1 kHz (ou WAV mono 32 kHz).
-  - Images : Format bitmap 320×240, 16 couleurs indexées (4-bits).
-- **Lunii V3 :**
-  - Fichier d'indexation préfixé par un point : `.md`
-  - Métadonnées et contrôles de sécurité alignés sur le firmware V3.
+Référence : driver Java STUdio (`FsStoryTellerAsyncDriver`, `CipherUtils`). Les firmwares 2.x et 3.x partagent la même disposition :
+
+- Racine : `.md` (métadonnées), `.pi` (index des UUID, 16 octets chacun) et `.content/`.
+- Dossier d'un pack : 8 derniers caractères hexadécimaux de l'UUID, en majuscules.
+- Fichiers `ni`, `nm` et `.cleartext` jamais chiffrés ; `.cleartext` n'est jamais copié.
+- **Firmware 2.x** (`.md` version 1-3) : XXTEA sur les 512 premiers octets ; `bt` dérivé de l'UUID de l'appareil et de `ri`.
+  - Audio : MP3 mono 44,1 kHz sans tags ID3.
+  - Images : bitmap 320×240, 16 couleurs indexées (4-bits), encodage RLE.
+- **Firmware 3.x** (`.md` version 6-7) : AES-CBC sur les 512 premiers octets avec la clé de l'appareil ; `bt` issu de `.md`.
 
 ---
 

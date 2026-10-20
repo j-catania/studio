@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lunii Web Studio - Driver V2/V3 & Index Pi</title>
+  <title>Lunii Web Studio - Driver V2/V3</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,10 +24,10 @@
       </div>
       <div>
         <h1 class="text-sm font-semibold text-white">Lunii Web Studio</h1>
-        <p class="text-xs text-slate-400">Driver natif V2 / V3 avec gestion d'index binaire (.pi)</p>
+        <p class="text-xs text-slate-400">Driver natif firmware 2.x / 3.x (index .pi, chiffrement XXTEA / AES)</p>
       </div>
     </div>
-    
+
     <div class="flex items-center gap-4">
       <div id="transferIndicator" class="hidden items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse">
         <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
@@ -56,7 +56,7 @@
             <p id="localDirLabel" class="text-xs text-slate-500 truncate max-w-[180px] sm:max-w-xs">Sélectionnez votre dossier</p>
           </div>
         </div>
-        <button id="btnOpenLocal" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-2 px-3 rounded-xl transition flex items-center gap-1.5">
+        <button id="btnOpenLocal" class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium py-2 px-3 rounded-xl transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
           Dossier PC
         </button>
@@ -80,7 +80,7 @@
             <p id="deviceMetaLabel" class="text-xs text-slate-500">Déconnectée</p>
           </div>
         </div>
-        <button id="btnOpenDevice" class="bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center gap-1.5">
+        <button id="btnOpenDevice" class="bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
           Connecter Lunii
         </button>
@@ -95,15 +95,47 @@
   </main>
 
   <script>
+    // ---------------------------------------------------------------------
+    // Format des packs FS (firmware 2.x / 3.x), porté depuis le driver Java :
+    //  - .md / .pi / .content à la racine de la carte SD
+    //  - dossier du pack = 8 derniers caractères hexadécimaux de l'UUID (majuscules)
+    //  - bibliothèque PC : un dossier par pack nommé "<uuid>[.suffixe]", fichiers en clair
+    //    (marqueur .cleartext), chiffrés à la volée lors des transferts
+    //  - V2 : XXTEA (clé commune) sur les 512 premiers octets, bt dérivé de la clé de l'appareil
+    //  - V3 : AES-CBC (clé de l'appareil) sur les 512 premiers octets, bt issu de .md
+    // ---------------------------------------------------------------------
+    const COMMON_KEY = new Uint8Array([0x91, 0xbd, 0x7a, 0x0a, 0xa7, 0x54, 0x40, 0xa9, 0xbb, 0xd4, 0x9d, 0x6c, 0xe0, 0xdc, 0xc0, 0xe3]);
+    const XXTEA_DELTA = 0x9e3779b9 | 0;
+    const CIPHER_BLOCK_SIZE = 512;
+    const BOOT_BLOCK_SIZE_V2 = 64;
+
+    const NODE_INDEX_FILENAME = 'ni';
+    const NIGHT_MODE_FILENAME = 'nm';
+    const IMAGE_INDEX_FILENAME = 'ri';
+    const BOOT_FILENAME = 'bt';
+    const CLEARTEXT_FILENAME = '.cleartext';
+    const CLEAR_FILES = [NODE_INDEX_FILENAME, NIGHT_MODE_FILENAME, CLEARTEXT_FILENAME];
+    const CLEARTEXT_RI_BEGINNING = '000\\';
+    const JUNK_FILES = ['thumbs.db', 'desktop.ini'];
+
+    // Les noms sans point sont acceptés en lecture par tolérance
+    const MD_NAMES = ['.md', 'md'];
+    const PI_NAMES = ['.pi', 'pi'];
+    const CONTENT_NAMES = ['.content', 'content'];
+
     let localDirHandle = null;
     let deviceRootHandle = null;
     let deviceContentHandle = null;
-    let piFileName = '.pi'; // ou 'pi'
-    let registeredDeviceUuids = []; // UUIDs listés dans le fichier .pi
+    let device = null; // { firmware, serial, uuid, keyV3, cryptoKey, piName, ... }
+    let registeredDeviceUuids = [];
+    let busy = false;
 
     let localPacks = [];
+    let localArchives = [];
+    let localOtherFiles = 0;
     let devicePacks = [];
-    const activeBlobUrls = new Set();
+    const localBlobUrls = new Set();
+    const deviceBlobUrls = new Set();
 
     const btnOpenLocal = document.getElementById('btnOpenLocal');
     const btnOpenDevice = document.getElementById('btnOpenDevice');
@@ -117,367 +149,810 @@
     const transferIndicator = document.getElementById('transferIndicator');
     const transferStatusText = document.getElementById('transferStatusText');
 
-    function createTrackedBlobUrl(blob) {
+    // ----- Utilitaires -----
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function createTrackedBlobUrl(blob, urlSet) {
       const url = URL.createObjectURL(blob);
-      activeBlobUrls.add(url);
+      urlSet.add(url);
       return url;
     }
 
-    // Convertisseur UUID binaire (16 octets) <-> Chaîne hexadécimale
-    function bufferToUuid(uint8Array, offset = 0) {
-      let hex = '';
-      for (let i = 0; i < 16; i++) {
-        hex += uint8Array[offset + i].toString(16).padStart(2, '0');
-      }
-      return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`.toUpperCase();
+    function revokeBlobUrls(urlSet) {
+      urlSet.forEach(url => URL.revokeObjectURL(url));
+      urlSet.clear();
     }
 
-    function uuidToBuffer(uuidStr) {
-      const clean = uuidStr.replace(/-/g, '');
-      const buf = new Uint8Array(16);
-      for (let i = 0; i < 16; i++) {
-        buf[i] = parseInt(clean.substr(i * 2, 2), 16) || 0;
+    function concatBytes(...parts) {
+      const out = new Uint8Array(parts.reduce((sum, p) => sum + p.length, 0));
+      let offset = 0;
+      for (const p of parts) {
+        out.set(p, offset);
+        offset += p.length;
       }
+      return out;
+    }
+
+    function toInts(bytes, littleEndian) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const ints = new Int32Array(bytes.length >> 2);
+      for (let i = 0; i < ints.length; i++) ints[i] = view.getInt32(i * 4, littleEndian);
+      return ints;
+    }
+
+    function fromInts(ints, littleEndian) {
+      const out = new Uint8Array(ints.length * 4);
+      const view = new DataView(out.buffer);
+      for (let i = 0; i < ints.length; i++) view.setInt32(i * 4, ints[i], littleEndian);
+      return out;
+    }
+
+    function reverseEndianness(bytes) {
+      return fromInts(toInts(bytes, true), false);
+    }
+
+    // UUID binaire (16 octets) <-> chaîne canonique en minuscules (comme java.util.UUID)
+    function bufferToUuid(bytes, offset = 0) {
+      let hex = '';
+      for (let i = 0; i < 16; i++) hex += bytes[offset + i].toString(16).padStart(2, '0');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+    }
+
+    function uuidToBuffer(uuid) {
+      const clean = uuid.replace(/-/g, '');
+      const buf = new Uint8Array(16);
+      for (let i = 0; i < 16; i++) buf[i] = parseInt(clean.substr(i * 2, 2), 16);
       return buf;
     }
 
-    // Obtenir le nom de dossier Lunii (8 derniers octets / 16 caractères hex)
-    function getShortDirNameFromUuid(uuidStr) {
-      const clean = uuidStr.replace(/-/g, '').toUpperCase();
-      return clean.length >= 16 ? clean.slice(-16) : clean.padStart(16, '0');
+    // Le nom d'un dossier de la bibliothèque est l'UUID du pack, éventuellement suivi d'un suffixe après un point
+    function parseUuidFromFolderName(name) {
+      const clean = name.split('.')[0].replace(/-/g, '');
+      if (!/^[0-9a-fA-F]{32}$/.test(clean)) return null;
+      return bufferToUuid(uuidToBuffer(clean));
     }
 
-    // Gestion de l'index maître (.pi / pi)
+    // Dossier du pack sur la Lunii : 8 derniers caractères de l'UUID
+    function getShortDirNameFromUuid(uuid) {
+      return uuid.replace(/-/g, '').slice(-8).toUpperCase();
+    }
+
+    // ----- XXTEA (firmware 2.x) -----
+    function mx(k, e, p, y, z, sum) {
+      return (((z >>> 5) ^ (y << 2)) + ((y >>> 3) ^ (z << 4))) ^ ((sum ^ y) + (k[(p & 3) ^ e] ^ z));
+    }
+
+    // n > 1 : chiffrement, n < -1 : déchiffrement (modifie v en place)
+    function btea(v, n, k) {
+      let y, z, sum, p, e;
+      if (n > 1) {
+        let rounds = 1 + Math.floor(52 / n);
+        sum = 0;
+        z = v[n - 1];
+        do {
+          sum = (sum + XXTEA_DELTA) | 0;
+          e = (sum >>> 2) & 3;
+          for (p = 0; p < n - 1; p++) {
+            y = v[p + 1];
+            v[p] += mx(k, e, p, y, z, sum);
+            z = v[p];
+          }
+          y = v[0];
+          v[n - 1] += mx(k, e, p, y, z, sum);
+          z = v[n - 1];
+        } while (--rounds !== 0);
+      } else if (n < -1) {
+        n = -n;
+        let rounds = 1 + Math.floor(52 / n);
+        sum = Math.imul(rounds, XXTEA_DELTA);
+        y = v[0];
+        do {
+          e = (sum >>> 2) & 3;
+          for (p = n - 1; p > 0; p--) {
+            z = v[p - 1];
+            v[p] -= mx(k, e, p, y, z, sum);
+            y = v[p];
+          }
+          z = v[n - 1];
+          v[0] -= mx(k, e, p, y, z, sum);
+          y = v[0];
+          sum = (sum - XXTEA_DELTA) | 0;
+        } while (--rounds !== 0);
+      }
+      return v;
+    }
+
+    // Chiffre / déchiffre les `blockSize` premiers octets, le reste est inchangé
+    function xxteaFirstBlock(data, keyBytes, blockSize, encrypt) {
+      const block = toInts(data.subarray(0, Math.min(blockSize, data.length)), true);
+      const n = Math.min(blockSize >> 2, data.length >> 2);
+      btea(block, encrypt ? n : -n, toInts(keyBytes, false));
+      const out = data.slice();
+      out.set(fromInts(block, true), 0);
+      return out;
+    }
+
+    // ----- AES-CBC (firmware 3.x) -----
+    // WebCrypto impose le padding PKCS7 : on le neutralise pour retrouver le comportement "NoPadding" du Java
+    async function aesCbc(bytes, encrypt) {
+      if (bytes.length === 0) return bytes;
+      let data = bytes;
+      if (data.length % 16 !== 0) {
+        data = new Uint8Array(bytes.length + 16 - (bytes.length % 16));
+        data.set(bytes);
+      }
+      const iv = reverseEndianness(device.keyV3.aesIv);
+      if (encrypt) {
+        const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, device.cryptoKey, data));
+        return encrypted.subarray(0, data.length);
+      }
+      // Bloc de padding valide pour le dernier bloc chiffré : chiffrement de 16 x 0x10 avec IV = dernier bloc
+      const lastBlock = data.slice(data.length - 16);
+      const padBlock = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: lastBlock }, device.cryptoKey, new Uint8Array(0)));
+      return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, device.cryptoKey, concatBytes(data, padBlock)));
+    }
+
+    // ----- Chiffrement des fichiers de packs (premiers 512 octets) -----
+    async function cipherHeadForDevice(head, cleartext) {
+      if (device.firmware === 2) {
+        return cleartext ? xxteaFirstBlock(head, COMMON_KEY, CIPHER_BLOCK_SIZE, true) : head;
+      }
+      const data = cleartext ? head : xxteaFirstBlock(head, COMMON_KEY, CIPHER_BLOCK_SIZE, false);
+      return aesCbc(data, true);
+    }
+
+    async function decipherHeadFromDevice(head) {
+      if (device.firmware === 2) return xxteaFirstBlock(head, COMMON_KEY, CIPHER_BLOCK_SIZE, false);
+      return (await aesCbc(head, false)).subarray(0, head.length);
+    }
+
+    // Fichier de démarrage V2 : 64 premiers octets de `ri` (chiffré) re-chiffrés avec la clé propre à l'appareil
+    function computeBootFileV2(riHead) {
+      const btKey = xxteaFirstBlock(device.uuid, COMMON_KEY, CIPHER_BLOCK_SIZE, false);
+      const specificKey = Uint8Array.from([11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4], i => btKey[i]);
+      return xxteaFirstBlock(riHead, specificKey, BOOT_BLOCK_SIZE_V2, true);
+    }
+
+    // ----- Métadonnées de l'appareil (.md) -----
+    async function parseDeviceMetadata(bytes) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const ascii = (start, length) => String.fromCharCode(...bytes.subarray(start, start + length));
+      const mdVersion = view.getInt16(0, true);
+      const infos = { mdVersion, serial: null, uuid: null, keyV3: null };
+
+      if (mdVersion >= 1 && mdVersion <= 3) {
+        if (bytes.length < 512) throw new Error("Fichier .md tronqué.");
+        infos.firmwareMajor = view.getInt16(6, true);
+        infos.firmwareMinor = view.getInt16(8, true);
+        const sn = view.getBigInt64(10, false);
+        if (sn !== 0n && sn !== -1n && sn !== -4294967296n) infos.serial = sn.toString().padStart(14, '0');
+        infos.uuid = bytes.slice(256, 512);
+      } else if (mdVersion >= 6 && mdVersion <= 7) {
+        if (bytes.length < 96) throw new Error("Fichier .md tronqué.");
+        infos.firmwareMajor = parseInt(ascii(2, 1), 10);
+        infos.firmwareMinor = parseInt(ascii(4, 1), 10);
+        const snBytes = bytes.slice(26, 50);
+        infos.serial = ascii(26, 24);
+        let aesKey, aesIv, bt;
+        if (mdVersion === 6) {
+          aesKey = snBytes.slice(0, 16);
+          aesIv = concatBytes(snBytes.slice(16, 24), snBytes.slice(0, 8));
+          bt = bytes.slice(64, 96);
+        } else {
+          aesKey = bytes.slice(64, 80);
+          aesIv = bytes.slice(80, 96);
+          bt = concatBytes(snBytes.slice(0, 24), snBytes.slice(0, 8));
+        }
+        infos.keyV3 = { aesKey, aesIv, bt };
+      } else {
+        throw new Error(`Version de métadonnées non supportée : ${mdVersion}`);
+      }
+
+      if (infos.firmwareMajor !== 2 && infos.firmwareMajor !== 3) {
+        throw new Error(`Firmware non supporté : ${infos.firmwareMajor}.${infos.firmwareMinor}`);
+      }
+      infos.firmware = infos.firmwareMajor;
+      if (infos.firmware === 3) {
+        if (!infos.keyV3) throw new Error("Métadonnées incohérentes avec le firmware 3.x.");
+        infos.cryptoKey = await crypto.subtle.importKey('raw', reverseEndianness(infos.keyV3.aesKey), 'AES-CBC', false, ['encrypt', 'decrypt']);
+      } else if (!infos.uuid) {
+        throw new Error("Métadonnées incohérentes avec le firmware 2.x.");
+      }
+      return infos;
+    }
+
+    async function getFirstFileHandle(dirHandle, names) {
+      for (const name of names) {
+        try {
+          return { name, handle: await dirHandle.getFileHandle(name) };
+        } catch (e) {
+          if (e.name !== 'NotFoundError') throw e;
+        }
+      }
+      return null;
+    }
+
+    async function getFirstDirHandle(dirHandle, names) {
+      for (const name of names) {
+        try {
+          return { name, handle: await dirHandle.getDirectoryHandle(name) };
+        } catch (e) {
+          if (e.name !== 'NotFoundError') throw e;
+        }
+      }
+      return null;
+    }
+
+    // ----- Index des packs (.pi) : suite d'UUID de 16 octets -----
     async function readDevicePiIndex() {
       registeredDeviceUuids = [];
-      try {
-        let fileHandle;
-        try {
-          fileHandle = await deviceRootHandle.getFileHandle(piFileName);
-        } catch {
-          piFileName = 'pi';
-          fileHandle = await deviceRootHandle.getFileHandle(piFileName);
-        }
+      const found = await getFirstFileHandle(deviceRootHandle, PI_NAMES);
+      if (!found) return;
+      device.piName = found.name;
+      const buffer = new Uint8Array(await (await found.handle.getFile()).arrayBuffer());
+      for (let i = 0; i + 16 <= buffer.length; i += 16) registeredDeviceUuids.push(bufferToUuid(buffer, i));
+    }
 
-        const file = await fileHandle.getFile();
-        const buffer = new Uint8Array(await file.arrayBuffer());
-        
-        // Chaque UUID occupe 16 octets
-        const count = Math.floor(buffer.length / 16);
-        for (let i = 0; i < count; i++) {
-          const uuid = bufferToUuid(buffer, i * 16);
-          registeredDeviceUuids.push(uuid);
-        }
-      } catch (err) {
-        console.warn("Fichier .pi / pi introuvable ou vide, initialisation d'un index vierge.", err);
+    async function writeBytes(fileHandle, bytes) {
+      const writable = await fileHandle.createWritable();
+      try {
+        await writable.write(bytes);
+        await writable.close();
+      } catch (e) {
+        try { await writable.abort(); } catch {}
+        throw e;
       }
     }
 
     async function writeDevicePiIndex(uuidList) {
       const buffer = new Uint8Array(uuidList.length * 16);
-      uuidList.forEach((uuid, idx) => {
-        const raw = uuidToBuffer(uuid);
-        buffer.set(raw, idx * 16);
-      });
+      uuidList.forEach((uuid, idx) => buffer.set(uuidToBuffer(uuid), idx * 16));
 
-      const fileHandle = await deviceRootHandle.getFileHandle(piFileName, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(buffer);
-      await writable.close();
+      const fileHandle = await deviceRootHandle.getFileHandle(device.piName, { create: true });
+      try {
+        await writeBytes(fileHandle, buffer);
+      } catch (e) {
+        // Le fichier caché ne peut pas toujours être remplacé en place : on le recrée
+        await deviceRootHandle.removeEntry(device.piName);
+        await writeBytes(await deviceRootHandle.getFileHandle(device.piName, { create: true }), buffer);
+      }
       registeredDeviceUuids = [...uuidList];
     }
 
-    // Recherche d'image de couverture
-    async function findCover(dirHandle) {
-      // 1. Chercher un thumbnail explicite
+    // ----- Couverture -----
+    // La première image d'un pack est toujours rf/000/00000000
+    async function findCover(dirHandle, urlSet, decipher) {
       for (const name of ['thumbnail.png', 'cover.png', 'thumbnail.jpg', 'cover.jpg']) {
         try {
           const fh = await dirHandle.getFileHandle(name);
-          return createTrackedBlobUrl(await fh.getFile());
+          return createTrackedBlobUrl(await fh.getFile(), urlSet);
         } catch {}
       }
 
-      // 2. Chercher dans les bitmaps Lunii (rf/ ou premier .bmp)
       try {
-        const rfHandle = await dirHandle.getDirectoryHandle('rf');
-        for await (const sub of rfHandle.values()) {
-          if (sub.kind === 'directory') {
-            for await (const f of sub.values()) {
-              if (f.kind === 'file' && f.name.toLowerCase().endsWith('.bmp')) {
-                return createTrackedBlobUrl(await f.getFile());
-              }
-            }
-          }
-        }
+        const rf = await dirHandle.getDirectoryHandle('rf');
+        const sub = await rf.getDirectoryHandle('000');
+        const fh = await sub.getFileHandle('00000000');
+        let bytes = new Uint8Array(await (await fh.getFile()).arrayBuffer());
+        if (decipher) bytes = concatBytes(await decipher(bytes.subarray(0, CIPHER_BLOCK_SIZE)), bytes.subarray(CIPHER_BLOCK_SIZE));
+        return createTrackedBlobUrl(new Blob([bytes], { type: 'image/bmp' }), urlSet);
       } catch {}
 
       return null;
     }
 
-    // 1. Volet Ordinateur
+    function coverElement(coverUrl, placeholderHtml) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'shrink-0';
+      wrapper.innerHTML = placeholderHtml;
+      if (coverUrl) {
+        const img = document.createElement('img');
+        img.src = coverUrl;
+        img.className = 'w-12 h-12 rounded-lg object-cover bg-slate-900 border border-slate-700/60';
+        img.addEventListener('load', () => wrapper.replaceChildren(img), { once: true });
+      }
+      return wrapper;
+    }
+
+    // ----- Bibliothèque PC -----
     btnOpenLocal.addEventListener('click', async () => {
       try {
         localDirHandle = await window.showDirectoryPicker({ id: 'pc_library', mode: 'readwrite' });
         localDirLabel.textContent = localDirHandle.name;
         await refreshLocalPacks();
       } catch (e) {
-        if (e.name !== 'AbortError') console.error(e);
+        handleError(e, 'Lecture de la bibliothèque');
       }
     });
 
+    // Les fichiers d'un pack sont en clair si .cleartext existe ou si `ri` commence par "000\"
+    async function isLocalPackCleartext(dirHandle) {
+      try {
+        await dirHandle.getFileHandle(CLEARTEXT_FILENAME);
+        return true;
+      } catch (e) {
+        if (e.name !== 'NotFoundError') throw e;
+      }
+      const ri = await (await dirHandle.getFileHandle(IMAGE_INDEX_FILENAME)).getFile();
+      const head = new Uint8Array(await ri.slice(0, CLEARTEXT_RI_BEGINNING.length).arrayBuffer());
+      return String.fromCharCode(...head) === CLEARTEXT_RI_BEGINNING;
+    }
+
     async function refreshLocalPacks() {
       if (!localDirHandle) return;
+      revokeBlobUrls(localBlobUrls);
       localPacks = [];
+      localArchives = [];
+      localOtherFiles = 0;
 
       for await (const entry of localDirHandle.values()) {
-        if (entry.kind === 'directory') {
-          let uuid = null;
-          // Tenter de lire l'UUID du pack si spécifié dans un fichier ou déduire du nom
-          try {
-            const uuidFile = await entry.getFileHandle('uuid.bin');
-            const file = await uuidFile.getFile();
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            if (bytes.length >= 16) uuid = bufferToUuid(bytes);
-          } catch {}
-
-          if (!uuid) {
-            // Si le nom du dossier est déjà un UUID complet ou partiel
-            const clean = entry.name.replace(/[^a-fA-F0-9]/g, '');
-            if (clean.length === 32) {
-              uuid = `${clean.slice(0,8)}-${clean.slice(8,12)}-${clean.slice(12,16)}-${clean.slice(16,20)}-${clean.slice(20,32)}`.toUpperCase();
-            } else {
-              // Génère un UUID déterministe pour le transfert
-              uuid = crypto.randomUUID().toUpperCase();
+        if (entry.kind === 'file') {
+          if (/\.zip$/i.test(entry.name)) {
+            try {
+              localArchives.push(await readArchiveMetadata(entry));
+            } catch (e) {
+              console.warn(`Archive ignorée : ${entry.name}`, e);
+              localOtherFiles++;
             }
+          } else if (/\.pack$/i.test(entry.name)) {
+            localOtherFiles++;
           }
-
-          const coverUrl = await findCover(entry);
-          localPacks.push({ name: entry.name, uuid, handle: entry, coverUrl });
+          continue;
         }
+        // Un pack FS contient un fichier d'index de noeuds `ni`
+        try {
+          await entry.getFileHandle(NODE_INDEX_FILENAME);
+        } catch {
+          continue;
+        }
+
+        const uuid = parseUuidFromFolderName(entry.name);
+        let cleartext = true;
+        try {
+          cleartext = await isLocalPackCleartext(entry);
+        } catch {}
+        const decipher = cleartext ? null : (head => xxteaFirstBlock(head, COMMON_KEY, CIPHER_BLOCK_SIZE, false));
+        const coverUrl = await findCover(entry, localBlobUrls, decipher);
+        localPacks.push({ name: entry.name, uuid, handle: entry, coverUrl, cleartext });
       }
 
+      localPacks.sort((a, b) => a.name.localeCompare(b.name));
+      localArchives.sort((a, b) => a.name.localeCompare(b.name));
       renderLocalList();
     }
 
     function renderLocalList() {
       localPacksContainer.innerHTML = '';
       if (localPacks.length === 0) {
+        localEmptyState.querySelector('p').textContent = localDirHandle
+          ? "Aucun pack au format dossier (ni, li, ri, si...) trouvé dans ce dossier."
+          : 'Choisissez le dossier de stockage de vos histoires.';
         localPacksContainer.appendChild(localEmptyState);
-        return;
       }
 
       for (const pack of localPacks) {
+        const installed = !!pack.uuid && registeredDeviceUuids.includes(pack.uuid);
         const row = document.createElement('div');
         row.className = 'bg-slate-800/40 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between gap-3';
-        
-        const coverHtml = pack.coverUrl 
-          ? `<img src="${pack.coverUrl}" class="w-12 h-12 rounded-lg object-cover bg-slate-900 border border-slate-700/60 shrink-0">`
-          : `<div class="w-12 h-12 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">📚</div>`;
 
-        row.innerHTML = `
-          <div class="flex items-center gap-3 min-w-0">
-            ${coverHtml}
-            <div class="min-w-0">
-              <p class="text-xs font-semibold text-slate-200 truncate">${pack.name}</p>
-              <p class="text-[10px] font-mono text-slate-500 truncate">${pack.uuid}</p>
-            </div>
-          </div>
-          <button class="btn-copy bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0">
-            <span>Installer</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
-          </button>
-        `;
+        const info = document.createElement('div');
+        info.className = 'flex items-center gap-3 min-w-0';
+        info.appendChild(coverElement(pack.coverUrl, '<div class="w-12 h-12 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">📚</div>'));
+        const text = document.createElement('div');
+        text.className = 'min-w-0';
+        text.innerHTML = `
+          <p class="text-xs font-semibold text-slate-200 truncate">${escapeHtml(pack.name)}</p>
+          <p class="text-[10px] font-mono text-slate-500 truncate">${pack.uuid ? pack.uuid : "Nom de dossier invalide : UUID attendu"}</p>`;
+        info.appendChild(text);
 
-        row.querySelector('.btn-copy').addEventListener('click', async () => {
-          if (!deviceContentHandle) {
-            alert("Connectez d'abord la Lunii.");
-            return;
-          }
-          await installPackToDevice(pack);
-        });
+        const button = document.createElement('button');
+        button.className = 'btn-copy bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:hover:bg-teal-500/10 disabled:hover:text-teal-400';
+        button.innerHTML = `<span>${installed ? 'Installée' : 'Installer'}</span>`;
+        button.disabled = !pack.uuid || installed;
+        button.addEventListener('click', () => installPackToDevice(pack));
 
+        row.append(info, button);
         localPacksContainer.appendChild(row);
+      }
+
+      if (localOtherFiles > 0) {
+        const note = document.createElement('p');
+        note.className = 'text-[10px] text-slate-500 text-center pt-1';
+        note.textContent = `${localOtherFiles} archive(s) .zip / .pack ignorée(s) : seuls les packs au format dossier sont transférables.`;
+        localPacksContainer.appendChild(note);
       }
     }
 
-    // 2. Volet Lunii
+    // ----- Lunii -----
     btnOpenDevice.addEventListener('click', async () => {
       try {
         deviceRootHandle = await window.showDirectoryPicker({ id: 'lunii_sd', mode: 'readwrite' });
         await inspectLunii();
       } catch (e) {
-        if (e.name !== 'AbortError') console.error(e);
+        handleError(e, 'Connexion à la Lunii');
       }
     });
 
     async function inspectLunii() {
-      let isLunii = false;
-      let isV3 = false;
+      device = null;
+      deviceContentHandle = null;
+      registeredDeviceUuids = [];
 
-      for await (const entry of deviceRootHandle.values()) {
-        if (entry.kind === 'directory' && (entry.name === '.content' || entry.name === 'content')) {
-          deviceContentHandle = entry;
-          isLunii = true;
-        }
-        if (entry.kind === 'file' && entry.name === '.md') isV3 = true;
-      }
-
-      if (!isLunii) {
-        alert("Répertoire de stockage introuvable (.content/ ou content/ absents).");
+      const mdFile = await getFirstFileHandle(deviceRootHandle, MD_NAMES);
+      const content = await getFirstDirHandle(deviceRootHandle, CONTENT_NAMES);
+      if (!mdFile || !content) {
+        resetDeviceUi();
+        alert("Lunii introuvable : sélectionnez la racine de la carte (fichiers .md, .pi et dossier .content).");
         return;
       }
 
-      piFileName = isV3 ? '.pi' : 'pi';
-      deviceBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Connecté (${isV3 ? 'V3' : 'V2'})`;
+      try {
+        const bytes = new Uint8Array(await (await mdFile.handle.getFile()).arrayBuffer());
+        device = await parseDeviceMetadata(bytes);
+      } catch (e) {
+        resetDeviceUi();
+        alert("Impossible de lire les métadonnées de la Lunii : " + e.message);
+        return;
+      }
+      device.piName = PI_NAMES[0];
+      deviceContentHandle = content.handle;
+
+      deviceBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Connectée (firmware ${device.firmwareMajor}.${device.firmwareMinor})`;
       deviceBadge.className = 'flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
-      deviceMetaLabel.textContent = `Mode ${isV3 ? 'V3' : 'V2'} - Index ${piFileName}`;
+      deviceMetaLabel.textContent = `Firmware ${device.firmwareMajor}.${device.firmwareMinor}${device.serial ? ' - N° ' + device.serial : ''}`;
 
       await readDevicePiIndex();
       await refreshDevicePacks();
     }
 
+    function resetDeviceUi() {
+      revokeBlobUrls(deviceBlobUrls);
+      devicePacks = [];
+      registeredDeviceUuids = [];
+      deviceBadge.className = 'flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700/60';
+      deviceBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-slate-500"></span> Lunii non connectée';
+      deviceMetaLabel.textContent = 'Déconnectée';
+      renderDeviceList();
+      renderLocalList();
+    }
+
     async function refreshDevicePacks() {
+      revokeBlobUrls(deviceBlobUrls);
       devicePacks = [];
 
-      // Charger d'abord les packs enregistrés dans l'index .pi
       for (const uuid of registeredDeviceUuids) {
-        const shortDirName = getShortDirNameFromUuid(uuid);
+        const folder = getShortDirNameFromUuid(uuid);
         try {
-          const dirHandle = await deviceContentHandle.getDirectoryHandle(shortDirName);
-          const coverUrl = await findCover(dirHandle);
-          devicePacks.push({ uuid, folder: shortDirName, handle: dirHandle, coverUrl });
+          const dirHandle = await deviceContentHandle.getDirectoryHandle(folder);
+          let version = null;
+          try {
+            const ni = await (await dirHandle.getFileHandle(NODE_INDEX_FILENAME)).getFile();
+            const head = new Uint8Array(await ni.slice(0, 4).arrayBuffer());
+            version = new DataView(head.buffer).getInt16(2, true);
+          } catch {}
+          let nightMode = false;
+          try {
+            await dirHandle.getFileHandle(NIGHT_MODE_FILENAME);
+            nightMode = true;
+          } catch {}
+          const coverUrl = await findCover(dirHandle, deviceBlobUrls, decipherHeadFromDevice);
+          devicePacks.push({ uuid, folder, handle: dirHandle, coverUrl, version, nightMode });
         } catch {
-          // Dossier manquant malgré la présence dans l'index
-          devicePacks.push({ uuid, folder: shortDirName, handle: null, coverUrl: null, missing: true });
+          devicePacks.push({ uuid, folder, handle: null, coverUrl: null, missing: true });
         }
       }
 
       renderDeviceList();
+      renderLocalList();
     }
 
     function renderDeviceList() {
       devicePacksContainer.innerHTML = '';
       if (devicePacks.length === 0) {
+        deviceEmptyState.querySelector('p').textContent = device
+          ? "Aucune histoire enregistrée dans le fichier d'index."
+          : 'Connectez la racine de la carte SD Lunii pour lire son index.';
         devicePacksContainer.appendChild(deviceEmptyState);
-        deviceEmptyState.querySelector('p').textContent = 'Aucune histoire enregistrée dans le fichier d\'index.';
         return;
       }
 
-      for (const pack of devicePacks) {
+      const iconButton = (title, path, extraClass = 'hover:text-slate-200') => {
+        const button = document.createElement('button');
+        button.className = `${extraClass} text-slate-500 p-1.5 transition shrink-0 disabled:opacity-30`;
+        button.title = title;
+        button.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${path}"></path></svg>`;
+        return button;
+      };
+
+      devicePacks.forEach((pack, index) => {
         const row = document.createElement('div');
         row.className = 'bg-slate-800/40 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between gap-3';
 
-        const coverHtml = pack.coverUrl 
-          ? `<img src="${pack.coverUrl}" class="w-12 h-12 rounded-lg object-cover bg-slate-900 border border-slate-700/60 shrink-0">`
-          : `<div class="w-12 h-12 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">📖</div>`;
+        const info = document.createElement('div');
+        info.className = 'flex items-center gap-3 min-w-0';
+        info.appendChild(coverElement(pack.coverUrl, '<div class="w-12 h-12 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center">📖</div>'));
+        const details = [`Dossier : ${pack.folder}`];
+        if (pack.version != null) details.push(`v${pack.version}`);
+        if (pack.nightMode) details.push('mode nuit');
+        if (pack.missing) details.push('(dossier manquant)');
+        const text = document.createElement('div');
+        text.className = 'min-w-0';
+        text.innerHTML = `
+          <p class="text-xs font-mono font-medium text-slate-200 truncate">${pack.uuid}</p>
+          <p class="text-[10px] text-teal-400">${escapeHtml(details.join(' - '))}</p>`;
+        info.appendChild(text);
 
-        row.innerHTML = `
-          <div class="flex items-center gap-3 min-w-0">
-            ${coverHtml}
-            <div class="min-w-0">
-              <p class="text-xs font-mono font-medium text-slate-200 truncate">${pack.uuid}</p>
-              <p class="text-[10px] text-teal-400">Dossier: ${pack.folder} ${pack.missing ? '(Incomplet)' : ''}</p>
-            </div>
-          </div>
-          <button class="btn-delete text-slate-500 hover:text-rose-400 p-1.5 transition shrink-0" title="Désinstaller">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-          </button>
-        `;
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center shrink-0';
 
-        // Désinstallation : supprime le dossier ET retire du fichier .pi
-        row.querySelector('.btn-delete').addEventListener('click', async () => {
-          if (confirm(`Désinstaller l'histoire ${pack.uuid} de la Lunii ?`)) {
-            setBusy(true, "Mise à jour de l'index et suppression...");
-            try {
-              if (!pack.missing) {
-                await deviceContentHandle.removeEntry(pack.folder, { recursive: true });
-              }
-              const newIndex = registeredDeviceUuids.filter(u => u !== pack.uuid);
-              await writeDevicePiIndex(newIndex);
-              await refreshDevicePacks();
-            } catch (err) {
-              alert("Erreur de désinstallation : " + err.message);
-            } finally {
-              setBusy(false);
-            }
-          }
-        });
+        const up = iconButton('Monter', 'M5 15l7-7 7 7');
+        up.disabled = index === 0;
+        up.addEventListener('click', () => movePack(index, -1));
 
+        const down = iconButton('Descendre', 'M19 9l-7 7-7-7');
+        down.disabled = index === devicePacks.length - 1;
+        down.addEventListener('click', () => movePack(index, 1));
+
+        const backup = iconButton('Sauvegarder sur le PC', 'M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M8 12l4 4m0 0l4-4m-4 4V4', 'hover:text-teal-400');
+        backup.disabled = !!pack.missing;
+        backup.addEventListener('click', () => downloadPackFromDevice(pack));
+
+        const remove = iconButton('Désinstaller', 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16', 'hover:text-rose-400');
+        remove.addEventListener('click', () => uninstallPack(pack));
+
+        actions.append(up, down, backup, remove);
+        row.append(info, actions);
         devicePacksContainer.appendChild(row);
-      }
+      });
     }
 
-    // Copie récursive de fichiers
-    async function copyTree(srcHandle, destHandle, onFile) {
-      for await (const entry of srcHandle.values()) {
-        if (entry.kind === 'file') {
-          if (onFile) onFile(entry.name);
-          const file = await entry.getFile();
-          const targetFile = await destHandle.getFileHandle(entry.name, { create: true });
-          const writable = await targetFile.createWritable();
-          await writable.write(await file.arrayBuffer());
-          await writable.close();
-        } else if (entry.kind === 'directory') {
-          const subDir = await destHandle.getDirectoryHandle(entry.name, { create: true });
-          await copyTree(entry, subDir, onFile);
+    // ----- Opérations sur les packs -----
+    async function movePack(index, delta) {
+      if (busy) return;
+      const target = index + delta;
+      if (target < 0 || target >= registeredDeviceUuids.length) return;
+      const reordered = [...registeredDeviceUuids];
+      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      await runBusy("Mise à jour de l'index...", async () => {
+        await writeDevicePiIndex(reordered);
+        await refreshDevicePacks();
+      });
+    }
+
+    async function uninstallPack(pack) {
+      if (busy || !confirm(`Désinstaller l'histoire ${pack.uuid} de la Lunii ?`)) return;
+      await runBusy("Mise à jour de l'index et suppression...", async () => {
+        // Comme le driver Java : retrait de l'index d'abord, puis suppression du dossier
+        await writeDevicePiIndex(registeredDeviceUuids.filter(u => u !== pack.uuid));
+        if (!pack.missing) {
+          try {
+            await deviceContentHandle.removeEntry(pack.folder, { recursive: true });
+          } catch (e) {
+            if (e.name !== 'NotFoundError') throw e;
+          }
         }
-      }
+        await refreshDevicePacks();
+      });
     }
 
-    // Processus d'installation complet conforme STUdio
-    async function installPackToDevice(pack) {
-      const targetFolder = getShortDirNameFromUuid(pack.uuid);
-      setBusy(true, `Copie des fichiers vers ${targetFolder}...`);
+    function canInstall(uuid) {
+      if (busy || !uuid) return false;
+      if (!device || !deviceContentHandle) {
+        alert("Connectez d'abord la Lunii.");
+        return false;
+      }
+      if (registeredDeviceUuids.includes(uuid)) {
+        alert("Ce pack est déjà présent sur la Lunii.");
+        return false;
+      }
+      return true;
+    }
 
+    async function installPackToDevice(pack) {
+      if (!canInstall(pack.uuid)) return;
+      await runBusy(`Préparation de ${getShortDirNameFromUuid(pack.uuid)}...`, async () => {
+        await copyFolderPackToDevice(pack);
+        await refreshDevicePacks();
+      });
+    }
+
+    // Copie le dossier, génère bt, puis inscrit l'UUID dans .pi
+    async function copyFolderPackToDevice(pack) {
+      const targetFolder = getShortDirNameFromUuid(pack.uuid);
+      let created = false;
       try {
-        // 1. Créer le sous-dossier tronqué dans .content/
+        try {
+          await deviceContentHandle.getDirectoryHandle(targetFolder);
+        } catch (e) {
+          if (e.name !== 'NotFoundError') throw e;
+          created = true;
+        }
         const packDir = await deviceContentHandle.getDirectoryHandle(targetFolder, { create: true });
 
-        // 2. Copier l'arborescence des fichiers du pack (ni, li, ri, si, rf, sf, bt, etc.)
-        await copyTree(pack.handle, packDir, (name) => {
-          transferStatusText.textContent = `Écriture : ${name}`;
-        });
+        await copyPackFolder(pack.handle, packDir, { upload: true, cleartext: pack.cleartext });
 
-        // 3. Vérifier la présence du token de boot `bt` ou créer un stub d'authentification par défaut
-        try {
-          await packDir.getFileHandle('bt');
-        } catch {
-          // Création d'un token binaire par défaut pour autoriser la lecture
-          const btHandle = await packDir.getFileHandle('bt', { create: true });
-          const btWritable = await btHandle.createWritable();
-          await btWritable.write(new Uint8Array(64)); // 64 octets nuls
-          await btWritable.close();
+        // Le pack n'est enregistré dans l'index qu'une fois entièrement copié
+        setStatus("Inscription dans l'index binaire...");
+        await writeDevicePiIndex([...registeredDeviceUuids, pack.uuid]);
+      } catch (e) {
+        if (created) {
+          try { await deviceContentHandle.removeEntry(targetFolder, { recursive: true }); } catch {}
         }
+        throw e;
+      }
+    }
 
-        // 4. Mettre à jour l'index binaire .pi (ajoute l'UUID au catalogue s'il n'y est pas déjà)
-        if (!registeredDeviceUuids.includes(pack.uuid)) {
-          transferStatusText.textContent = "Inscription dans l'index binaire...";
-          const updatedIndex = [...registeredDeviceUuids, pack.uuid];
-          await writeDevicePiIndex(updatedIndex);
-        }
-
+    // Archive .zip : conversion en dossier FS dans la bibliothèque (comme le Java), puis installation
+    async function installArchiveToDevice(archive) {
+      if (!canInstall(archive.uuid)) return;
+      await runBusy(`Conversion de ${archive.name}...`, async () => {
+        const converted = await convertArchiveToFsFolder(archive);
+        await copyFolderPackToDevice({ uuid: archive.uuid, handle: converted, cleartext: true });
+        await refreshLocalPacks();
         await refreshDevicePacks();
-      } catch (err) {
-        console.error(err);
-        alert("Erreur lors de l'installation : " + err.message);
+      });
+    }
+
+    async function convertArchive(archive) {
+      if (busy) return;
+      await runBusy(`Conversion de ${archive.name}...`, async () => {
+        await convertArchiveToFsFolder(archive);
+        await refreshLocalPacks();
+      });
+    }
+
+    async function downloadPackFromDevice(pack) {
+      if (busy) return;
+      if (!localDirHandle) {
+        alert("Choisissez d'abord le dossier de la bibliothèque PC.");
+        return;
+      }
+      try {
+        await localDirHandle.getDirectoryHandle(pack.uuid);
+        alert(`Le dossier ${pack.uuid} existe déjà dans la bibliothèque.`);
+        return;
+      } catch (e) {
+        if (e.name !== 'NotFoundError') {
+          handleError(e, 'Sauvegarde');
+          return;
+        }
+      }
+
+      await runBusy(`Préparation de ${pack.uuid}...`, async () => {
+        let destDir = null;
+        try {
+          destDir = await localDirHandle.getDirectoryHandle(pack.uuid, { create: true });
+          // Les fichiers sont déchiffrés : on l'indique avec .cleartext
+          await writeBytes(await destDir.getFileHandle(CLEARTEXT_FILENAME, { create: true }), new Uint8Array(0));
+          await copyPackFolder(pack.handle, destDir, { upload: false });
+        } catch (e) {
+          if (destDir) {
+            try { await localDirHandle.removeEntry(pack.uuid, { recursive: true }); } catch {}
+          }
+          throw e;
+        }
+        await refreshLocalPacks();
+      });
+    }
+
+    // ----- Copie d'un dossier de pack avec (dé)chiffrement -----
+    function shouldCopy(name, isRoot) {
+      const lower = name.toLowerCase();
+      if (name === CLEARTEXT_FILENAME || name.startsWith('.') || JUNK_FILES.includes(lower)) return false;
+      // Le fichier bt est toujours régénéré pour l'appareil cible
+      return !(isRoot && name === BOOT_FILENAME);
+    }
+
+    async function collectTree(dirHandle, path = []) {
+      const tree = { dirs: [], files: [] };
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'directory') {
+          if (entry.name.startsWith('.')) continue;
+          const childPath = [...path, entry.name];
+          tree.dirs.push(childPath);
+          const sub = await collectTree(entry, childPath);
+          tree.dirs.push(...sub.dirs);
+          tree.files.push(...sub.files);
+        } else if (shouldCopy(entry.name, path.length === 0)) {
+          tree.files.push({ path: [...path, entry.name], file: await entry.getFile() });
+        }
+      }
+      return tree;
+    }
+
+    async function copyPackFolder(srcDir, destDir, { upload, cleartext }) {
+      const { dirs, files } = await collectTree(srcDir);
+      const total = files.reduce((sum, f) => sum + f.file.size, 0);
+      let transferred = 0;
+      const startTime = performance.now();
+
+      const dirHandles = new Map([['', destDir]]);
+      for (const path of dirs) {
+        const parent = dirHandles.get(path.slice(0, -1).join('/'));
+        dirHandles.set(path.join('/'), await parent.getDirectoryHandle(path[path.length - 1], { create: true }));
+      }
+
+      for (const { path, file } of files) {
+        const name = path[path.length - 1];
+        const target = dirHandles.get(path.slice(0, -1).join('/'));
+        const fileHandle = await target.getFileHandle(name, { create: true });
+
+        let parts;
+        if (CLEAR_FILES.includes(name)) {
+          parts = [file];
+        } else {
+          const head = new Uint8Array(await file.slice(0, CIPHER_BLOCK_SIZE).arrayBuffer());
+          const processedHead = upload ? await cipherHeadForDevice(head, cleartext) : await decipherHeadFromDevice(head);
+          parts = [processedHead, file.slice(CIPHER_BLOCK_SIZE)];
+        }
+
+        const writable = await fileHandle.createWritable();
+        try {
+          for (const part of parts) await writable.write(part);
+          await writable.close();
+        } catch (e) {
+          try { await writable.abort(); } catch {}
+          throw e;
+        }
+
+        transferred += file.size;
+        const percent = total > 0 ? Math.round((transferred / total) * 100) : 100;
+        const speed = transferred / Math.max((performance.now() - startTime) / 1000, 0.001);
+        setStatus(`${upload ? 'Écriture' : 'Lecture'} : ${path.join('/')} (${percent}% - ${(speed / 1048576).toFixed(1)} Mo/s)`);
+      }
+
+      if (upload) await writeBootFile(destDir);
+    }
+
+    async function writeBootFile(packDir) {
+      setStatus('Génération du fichier de démarrage...');
+      let boot;
+      if (device.firmware === 2) {
+        const ri = await (await packDir.getFileHandle(IMAGE_INDEX_FILENAME)).getFile();
+        boot = computeBootFileV2(new Uint8Array(await ri.slice(0, BOOT_BLOCK_SIZE_V2).arrayBuffer()));
+      } else {
+        boot = device.keyV3.bt;
+      }
+      await writeBytes(await packDir.getFileHandle(BOOT_FILENAME, { create: true }), boot);
+    }
+
+    // ----- Etat de l'interface -----
+    function setStatus(message) {
+      transferStatusText.textContent = message;
+    }
+
+    function handleError(e, context) {
+      // L'utilisateur a simplement fermé la boîte de dialogue
+      if (e.name === 'AbortError') return;
+      console.error(e);
+      alert(`${context} : ${e.name === 'NotAllowedError' ? 'permission refusée.' : e.message || e}`);
+    }
+
+    async function runBusy(message, task) {
+      setBusy(true, message);
+      try {
+        await task();
+      } catch (e) {
+        handleError(e, 'Erreur');
       } finally {
         setBusy(false);
       }
     }
 
-    function setBusy(busy, message) {
-      if (busy) {
+    function setBusy(isBusy, message) {
+      busy = isBusy;
+      if (isBusy) {
         transferStatusText.textContent = message;
         transferIndicator.classList.remove('hidden');
         transferIndicator.classList.add('flex');
-        btnOpenLocal.disabled = true;
-        btnOpenDevice.disabled = true;
       } else {
         transferIndicator.classList.add('hidden');
         transferIndicator.classList.remove('flex');
-        btnOpenLocal.disabled = false;
-        btnOpenDevice.disabled = false;
       }
+      btnOpenLocal.disabled = isBusy;
+      btnOpenDevice.disabled = isBusy;
     }
   </script>
 </body>

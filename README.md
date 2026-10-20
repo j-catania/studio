@@ -13,7 +13,7 @@ Ce projet s'inspire du fonctionnement de [STUdio](https://github.com/marian-m12l
 - **Transfert bidirectionnel :**
   - Copie récursive de packs du PC vers la carte SD de la Lunii.
   - Extraction et sauvegarde de packs depuis la Lunii vers le PC.
-- **Gestion du stockage :** Détection du modèle (V2 avec `md`, V3 avec `.md`) et suppression directe de packs.
+- **Gestion du stockage :** Détection du firmware (2.x / 3.x) via `.md`, suppression et réorganisation des packs dans l'index `.pi`.
 - **Suivi en direct :** Indicateur d'état et affichage des fichiers traités en temps réel pendant les transferts.
 
 ---
@@ -50,9 +50,19 @@ L'application repose sur la **File System Access API** (`showDirectoryPicker`) p
 
 ## Structure des données Lunii
 
-À la racine de la carte SD :
-- `.content/` ou `content/` : Répertoire contenant chaque histoire dans un sous-dossier portant son identifiant (UUID).
-- `md` (Lunii V2) ou `.md` (Lunii V3) : Fichier binaire de métadonnées faisant office d'index des histoires reconnues par le microcontrôleur.
+À la racine de la carte SD (firmwares 2.x et 3.x) :
+- `.md` : Métadonnées de l'appareil (version du firmware, numéro de série, clés de chiffrement).
+- `.pi` : Index binaire des histoires, une suite d'UUID de 16 octets dans l'ordre d'affichage.
+- `.content/` : Un sous-dossier par histoire, nommé d'après les **8 derniers caractères hexadécimaux** de son UUID (ex. `23456789`).
+
+### Transferts
+
+La bibliothèque PC contient un dossier par pack, nommé `<uuid>` (ou `<uuid>.suffixe`), avec les fichiers `ni`, `li`, `ri`, `si`, `rf/` et `sf/` en clair (marqueur `.cleartext`). Comme dans STUdio, le chiffrement est appliqué pendant le transfert :
+
+- **Firmware 2.x :** les 512 premiers octets de chaque fichier sont chiffrés en XXTEA (clé commune) ; le fichier `bt` est dérivé de la clé de l'appareil.
+- **Firmware 3.x :** les 512 premiers octets sont chiffrés en AES-CBC avec la clé de l'appareil lue dans `.md` ; `bt` provient de `.md`.
+- **Sauvegarde Lunii → PC :** les fichiers sont déchiffrés dans un dossier `<uuid>` de la bibliothèque.
+- Les archives `.zip` / `.pack` de la bibliothèque ne sont pas transférables (conversion non portée) ; seuls les packs au format dossier le sont.
 
 ---
 
