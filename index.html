@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lunii Web Studio - Transfert Local & Périphérique</title>
+  <title>Lunii Web Studio - Transfert & Couvertures</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
-    /* Personnalisation fine de la scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
@@ -27,12 +26,12 @@
       </div>
       <div>
         <h1 class="text-sm font-semibold text-white leading-tight">Lunii Web Studio</h1>
-        <p class="text-xs text-slate-400">Gestionnaire bidirectionnel autonome (Lunii V2 & V3)</p>
+        <p class="text-xs text-slate-400">Gestionnaire bidirectionnel avec aperçu visuel</p>
       </div>
     </div>
     
     <div class="flex items-center gap-4">
-      <!-- Indicateur d'état du transfert -->
+      <!-- Indicateur de transfert -->
       <div id="transferIndicator" class="hidden items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse">
         <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
         <span id="transferStatusText">Copie en cours...</span>
@@ -46,42 +45,39 @@
     </div>
   </header>
 
-  <!-- Contenu Principal : Grille 2 Colonnes -->
+  <!-- Grille 2 Colonnes -->
   <main class="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
 
-    <!-- Colonne GAUCHE : Bibliothèque PC locale -->
+    <!-- Colonne GAUCHE : Bibliothèque PC -->
     <div class="bg-slate-900 border border-slate-800 rounded-2xl flex flex-col min-h-0 shadow-sm overflow-hidden">
-      <!-- En-tête volet PC -->
-      <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
         <div class="flex items-center gap-2.5">
           <div class="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
           </div>
           <div>
             <h2 class="text-sm font-semibold text-slate-200">Bibliothèque PC</h2>
-            <p id="localDirLabel" class="text-xs text-slate-500 truncate max-w-[200px] sm:max-w-xs">Aucun dossier sélectionné</p>
+            <p id="localDirLabel" class="text-xs text-slate-500 truncate max-w-[180px] sm:max-w-xs">Aucun dossier sélectionné</p>
           </div>
         </div>
-        <button id="btnOpenLocal" class="bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-medium py-2 px-3.5 rounded-xl transition duration-150 flex items-center gap-1.5 shadow-sm">
+        <button id="btnOpenLocal" class="bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-medium py-2 px-3 rounded-xl transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
-          Choisir le dossier
+          Dossier PC
         </button>
       </div>
 
-      <!-- Liste des packs locaux -->
-      <div id="localPacksContainer" class="flex-1 overflow-y-auto p-4 space-y-2.5">
+      <!-- Liste packs locaux -->
+      <div id="localPacksContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
         <div id="localEmptyState" class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
           <svg class="w-10 h-10 mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"></path></svg>
-          <p class="text-xs font-medium">Sélectionnez le dossier contenant vos histoires</p>
-          <p class="text-[11px] text-slate-600 mt-1">Dossiers de packs ou fichiers extraits depuis STUdio</p>
+          <p class="text-xs font-medium">Sélectionnez le dossier de vos histoires</p>
         </div>
       </div>
     </div>
 
-    <!-- Colonne DROITE : Boîte à histoires Lunii -->
+    <!-- Colonne DROITE : Lunii -->
     <div class="bg-slate-900 border border-slate-800 rounded-2xl flex flex-col min-h-0 shadow-sm overflow-hidden">
-      <!-- En-tête volet Lunii -->
-      <div class="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
         <div class="flex items-center gap-2.5">
           <div class="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
@@ -91,18 +87,17 @@
             <p id="deviceMetaLabel" class="text-xs text-slate-500">Déconnectée</p>
           </div>
         </div>
-        <button id="btnOpenDevice" class="bg-teal-500 hover:bg-teal-400 active:bg-teal-600 text-slate-950 text-xs font-semibold py-2 px-3.5 rounded-xl transition duration-150 flex items-center gap-1.5 shadow-sm">
+        <button id="btnOpenDevice" class="bg-teal-500 hover:bg-teal-400 active:bg-teal-600 text-slate-950 text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
-          Connecter la Lunii
+          Connecter Lunii
         </button>
       </div>
 
-      <!-- Liste des packs Lunii -->
-      <div id="devicePacksContainer" class="flex-1 overflow-y-auto p-4 space-y-2.5">
+      <!-- Liste packs Lunii -->
+      <div id="devicePacksContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
         <div id="deviceEmptyState" class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
           <svg class="w-10 h-10 mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
-          <p class="text-xs font-medium">Sélectionnez la racine de la carte SD</p>
-          <p class="text-[11px] text-slate-600 mt-1">Lecteur amovible contenant le dossier .content ou content</p>
+          <p class="text-xs font-medium">Sélectionnez la carte SD de la Lunii</p>
         </div>
       </div>
     </div>
@@ -110,7 +105,6 @@
   </main>
 
   <script>
-    // Handles du système de fichiers
     let localDirHandle = null;
     let deviceRootHandle = null;
     let deviceContentHandle = null;
@@ -119,7 +113,9 @@
     let localPacks = [];
     let devicePacks = [];
 
-    // Sélecteurs DOM
+    // Cache des object URLs pour libérer la mémoire lors des rechargements
+    const activeBlobUrls = new Set();
+
     const btnOpenLocal = document.getElementById('btnOpenLocal');
     const btnOpenDevice = document.getElementById('btnOpenDevice');
     const localDirLabel = document.getElementById('localDirLabel');
@@ -132,7 +128,66 @@
     const transferIndicator = document.getElementById('transferIndicator');
     const transferStatusText = document.getElementById('transferStatusText');
 
-    // 1. Ouvrir le dossier local (PC)
+    function createTrackedBlobUrl(blob) {
+      const url = URL.createObjectURL(blob);
+      activeBlobUrls.add(url);
+      return url;
+    }
+
+    function cleanupBlobUrls() {
+      for (const url of activeBlobUrls) {
+        URL.revokeObjectURL(url);
+      }
+      activeBlobUrls.clear();
+    }
+
+    // Extraction ou recherche d'une image de couverture dans un dossier de pack
+    async function extractCoverUrl(dirHandle) {
+      const coverCandidates = [
+        'thumbnail.png', 'thumbnail.jpg', 'cover.png', 'cover.jpg', 
+        'icon.png', 'icon.jpg', 'cover.bmp', 'thumbnail.bmp'
+      ];
+
+      // 1. Chercher un fichier image classique nommé explicitement
+      for (const name of coverCandidates) {
+        try {
+          const fileHandle = await dirHandle.getFileHandle(name);
+          const file = await fileHandle.getFile();
+          return createTrackedBlobUrl(file);
+        } catch {
+          // Non trouvé, on continue
+        }
+      }
+
+      // 2. Parcourir les fichiers à la recherche de n'importe quelle image ou du dossier assets/images
+      try {
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const lower = entry.name.toLowerCase();
+            if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+              const file = await entry.getFile();
+              return createTrackedBlobUrl(file);
+            }
+          } else if (entry.kind === 'directory' && (entry.name === 'images' || entry.name === 'assets')) {
+            for await (const subEntry of entry.values()) {
+              if (subEntry.kind === 'file') {
+                const subLower = subEntry.name.toLowerCase();
+                if (subLower.endsWith('.png') || subLower.endsWith('.jpg') || subLower.endsWith('.jpeg')) {
+                  const file = await subEntry.getFile();
+                  return createTrackedBlobUrl(file);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Impossible de scanner les images pour :", dirHandle.name, e);
+      }
+
+      return null;
+    }
+
+    // 1. Scan Dossier PC
     btnOpenLocal.addEventListener('click', async () => {
       try {
         localDirHandle = await window.showDirectoryPicker({ id: 'pc_stories', mode: 'readwrite' });
@@ -143,14 +198,14 @@
       }
     });
 
-    // Scanner les packs locaux (cherche les sous-dossiers ou fichiers)
     async function refreshLocalPacks() {
       if (!localDirHandle) return;
       localPacks = [];
 
       for await (const entry of localDirHandle.values()) {
         if (entry.kind === 'directory') {
-          localPacks.push({ name: entry.name, handle: entry, type: 'directory' });
+          const coverUrl = await extractCoverUrl(entry);
+          localPacks.push({ name: entry.name, handle: entry, coverUrl });
         }
       }
 
@@ -161,45 +216,49 @@
       localPacksContainer.innerHTML = '';
       if (localPacks.length === 0) {
         localPacksContainer.appendChild(localEmptyState);
-        localEmptyState.querySelector('p').textContent = 'Aucun dossier de pack trouvé';
+        localEmptyState.querySelector('p').textContent = 'Aucun pack trouvé dans ce dossier';
         return;
       }
 
       for (const pack of localPacks) {
         const row = document.createElement('div');
-        row.className = 'bg-slate-800/40 border border-slate-800/80 hover:border-slate-700/80 rounded-xl p-3 flex items-center justify-between transition';
+        row.className = 'bg-slate-800/40 border border-slate-800/80 hover:border-slate-700/80 rounded-xl p-3 flex items-center justify-between transition gap-3';
+        
+        // Thumbnail HTML
+        const coverHtml = pack.coverUrl 
+          ? `<img src="${pack.coverUrl}" alt="Cover" class="w-12 h-12 rounded-lg object-cover bg-slate-900 border border-slate-700/60 shrink-0 shadow-inner">`
+          : `<div class="w-12 h-12 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
+               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+             </div>`;
+
         row.innerHTML = `
-          <div class="flex items-center gap-3 min-w-0 pr-2">
-            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
-            </div>
+          <div class="flex items-center gap-3 min-w-0">
+            ${coverHtml}
             <div class="min-w-0">
               <p class="text-xs font-semibold text-slate-200 truncate">${pack.name}</p>
-              <p class="text-[10px] text-slate-500">Dossier de pack</p>
+              <p class="text-[10px] text-slate-500">Pack local</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
-            <button data-name="${pack.name}" class="btn-copy-to-device bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition duration-150 flex items-center gap-1" title="Transférer sur la Lunii">
+            <button class="btn-copy bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1">
               <span>Transférer</span>
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
             </button>
-            <button data-name="${pack.name}" class="btn-delete-local text-slate-500 hover:text-rose-400 p-1.5 transition" title="Supprimer du PC">
+            <button class="btn-delete text-slate-500 hover:text-rose-400 p-1.5 transition">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
             </button>
           </div>
         `;
 
-        // Bouton : Transférer vers la Lunii
-        row.querySelector('.btn-copy-to-device').addEventListener('click', async () => {
+        row.querySelector('.btn-copy').addEventListener('click', async () => {
           if (!deviceContentHandle) {
-            alert("Veuillez d'abord connecter votre Lunii dans la colonne de droite.");
+            alert("Connectez d'abord la Lunii dans la colonne de droite.");
             return;
           }
           await transferPackToDevice(pack);
         });
 
-        // Bouton : Supprimer du PC
-        row.querySelector('.btn-delete-local').addEventListener('click', async () => {
+        row.querySelector('.btn-delete').addEventListener('click', async () => {
           if (confirm(`Supprimer le dossier local "${pack.name}" ?`)) {
             await localDirHandle.removeEntry(pack.name, { recursive: true });
             await refreshLocalPacks();
@@ -210,7 +269,7 @@
       }
     }
 
-    // 2. Ouvrir la Lunii
+    // 2. Scan Lunii
     btnOpenDevice.addEventListener('click', async () => {
       try {
         deviceRootHandle = await window.showDirectoryPicker({ id: 'lunii_sd', mode: 'readwrite' });
@@ -236,7 +295,7 @@
       }
 
       if (!isLunii) {
-        alert("La racine de la Lunii doit contenir un dossier '.content' ou 'content'.");
+        alert("La racine sélectionnée ne contient pas de dossier '.content' ou 'content'.");
         return;
       }
 
@@ -253,7 +312,8 @@
 
       for await (const entry of deviceContentHandle.values()) {
         if (entry.kind === 'directory') {
-          devicePacks.push({ name: entry.name, handle: entry });
+          const coverUrl = await extractCoverUrl(entry);
+          devicePacks.push({ name: entry.name, handle: entry, coverUrl });
         }
       }
 
@@ -270,39 +330,42 @@
 
       for (const pack of devicePacks) {
         const row = document.createElement('div');
-        row.className = 'bg-slate-800/40 border border-slate-800/80 hover:border-slate-700/80 rounded-xl p-3 flex items-center justify-between transition';
+        row.className = 'bg-slate-800/40 border border-slate-800/80 hover:border-slate-700/80 rounded-xl p-3 flex items-center justify-between transition gap-3';
+        
+        const coverHtml = pack.coverUrl 
+          ? `<img src="${pack.coverUrl}" alt="Cover" class="w-12 h-12 rounded-lg object-cover bg-slate-900 border border-slate-700/60 shrink-0 shadow-inner">`
+          : `<div class="w-12 h-12 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
+               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+             </div>`;
+
         row.innerHTML = `
-          <div class="flex items-center gap-3 min-w-0 pr-2">
-            <div class="w-8 h-8 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-            </div>
+          <div class="flex items-center gap-3 min-w-0">
+            ${coverHtml}
             <div class="min-w-0">
               <p class="text-xs font-mono font-medium text-slate-200 truncate">${pack.name}</p>
               <p class="text-[10px] text-teal-500/80">Pack installé</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
-            <button data-name="${pack.name}" class="btn-backup-to-pc bg-indigo-500/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border border-indigo-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition duration-150 flex items-center gap-1" title="Sauvegarder sur le PC">
+            <button class="btn-backup bg-indigo-500/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border border-indigo-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
               <span>Extraire</span>
             </button>
-            <button data-name="${pack.name}" class="btn-delete-device text-slate-500 hover:text-rose-400 p-1.5 transition" title="Supprimer de la Lunii">
+            <button class="btn-delete text-slate-500 hover:text-rose-400 p-1.5 transition">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
             </button>
           </div>
         `;
 
-        // Bouton : Extraire vers le PC
-        row.querySelector('.btn-backup-to-pc').addEventListener('click', async () => {
+        row.querySelector('.btn-backup').addEventListener('click', async () => {
           if (!localDirHandle) {
-            alert("Veuillez d'abord choisir un dossier sur votre ordinateur dans la colonne de gauche.");
+            alert("Choisissez d'abord un dossier local dans la colonne de gauche.");
             return;
           }
           await transferPackToLocal(pack);
         });
 
-        // Bouton : Supprimer de la Lunii
-        row.querySelector('.btn-delete-device').addEventListener('click', async () => {
+        row.querySelector('.btn-delete').addEventListener('click', async () => {
           if (confirm(`Supprimer le pack "${pack.name}" de la Lunii ?`)) {
             await deviceContentHandle.removeEntry(pack.name, { recursive: true });
             await refreshDevicePacks();
@@ -313,7 +376,7 @@
       }
     }
 
-    // 3. Moteurs de transfert récursif de répertoires
+    // 3. Moteur de copie récursive
     async function copyDirectoryRecursive(srcHandle, destParentHandle, newDirName, onProgress) {
       const targetDir = await destParentHandle.getDirectoryHandle(newDirName, { create: true });
       
@@ -331,7 +394,6 @@
       }
     }
 
-    // Transfert PC -> Lunii
     async function transferPackToDevice(pack) {
       setBusy(true, `Copie de "${pack.name}" vers la Lunii...`);
       try {
@@ -347,7 +409,6 @@
       }
     }
 
-    // Transfert Lunii -> PC
     async function transferPackToLocal(pack) {
       setBusy(true, `Extraction de "${pack.name}" vers le PC...`);
       try {
