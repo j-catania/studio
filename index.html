@@ -525,12 +525,21 @@
 
     function renderLocalList() {
       localPacksContainer.innerHTML = '';
-      if (localPacks.length === 0) {
+      if (localPacks.length + localArchives.length === 0) {
         localEmptyState.querySelector('p').textContent = localDirHandle
-          ? "Aucun pack au format dossier (ni, li, ri, si...) trouvé dans ce dossier."
+          ? "Aucun pack (dossier ni, li, ri, si... ou archive .zip) trouvé dans ce dossier."
           : 'Choisissez le dossier de stockage de vos histoires.';
         localPacksContainer.appendChild(localEmptyState);
       }
+
+      const actionButton = (label, handler, disabled) => {
+        const button = document.createElement('button');
+        button.className = 'bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:hover:bg-teal-500/10 disabled:hover:text-teal-400';
+        button.textContent = label;
+        button.disabled = disabled;
+        button.addEventListener('click', handler);
+        return button;
+      };
 
       for (const pack of localPacks) {
         const installed = !!pack.uuid && registeredDeviceUuids.includes(pack.uuid);
@@ -547,20 +556,40 @@
           <p class="text-[10px] font-mono text-slate-500 truncate">${pack.uuid ? pack.uuid : "Nom de dossier invalide : UUID attendu"}</p>`;
         info.appendChild(text);
 
-        const button = document.createElement('button');
-        button.className = 'btn-copy bg-teal-500/10 hover:bg-teal-500 text-teal-400 hover:text-slate-950 border border-teal-500/20 text-xs font-medium px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:hover:bg-teal-500/10 disabled:hover:text-teal-400';
-        button.innerHTML = `<span>${installed ? 'Installée' : 'Installer'}</span>`;
-        button.disabled = !pack.uuid || installed;
-        button.addEventListener('click', () => installPackToDevice(pack));
+        row.append(info, actionButton(installed ? 'Installée' : 'Installer', () => installPackToDevice(pack), !pack.uuid || installed));
+        localPacksContainer.appendChild(row);
+      }
 
-        row.append(info, button);
+      for (const archive of localArchives) {
+        const installed = registeredDeviceUuids.includes(archive.uuid);
+        const row = document.createElement('div');
+        row.className = 'bg-slate-800/40 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between gap-3';
+
+        const info = document.createElement('div');
+        info.className = 'flex items-center gap-3 min-w-0';
+        info.appendChild(coverElement(archive.coverUrl, '<div class="w-12 h-12 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">🗜️</div>'));
+        const text = document.createElement('div');
+        text.className = 'min-w-0';
+        text.innerHTML = `
+          <p class="text-xs font-semibold text-slate-200 truncate">${escapeHtml(archive.title || archive.name)}</p>
+          <p class="text-[10px] text-slate-500 truncate">${escapeHtml(archive.name)} - archive à convertir</p>
+          <p class="text-[10px] font-mono text-slate-500 truncate">${archive.uuid}</p>`;
+        info.appendChild(text);
+
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center gap-2 shrink-0';
+        actions.append(
+          actionButton('Convertir', () => convertArchive(archive), false),
+          actionButton(installed ? 'Installée' : 'Installer', () => installArchiveToDevice(archive), installed)
+        );
+        row.append(info, actions);
         localPacksContainer.appendChild(row);
       }
 
       if (localOtherFiles > 0) {
         const note = document.createElement('p');
         note.className = 'text-[10px] text-slate-500 text-center pt-1';
-        note.textContent = `${localOtherFiles} archive(s) .zip / .pack ignorée(s) : seuls les packs au format dossier sont transférables.`;
+        note.textContent = `${localOtherFiles} fichier(s) .zip invalide(s) ou .pack (format binaire) ignoré(s).`;
         localPacksContainer.appendChild(note);
       }
     }
@@ -916,6 +945,551 @@
         boot = device.keyV3.bt;
       }
       await writeBytes(await packDir.getFileHandle(BOOT_FILENAME, { create: true }), boot);
+    }
+
+    // ---------------------------------------------------------------------
+    // Conversion d'une archive .zip (story.json + assets/) en dossier FS.
+    // Portage de ArchiveStoryPackReader, PackAssetsCompression.withPreparedAssetsFirmware2dot4
+    // et FsStoryPackWriter : images en BMP 320x240 / 4 bits / RLE4, sons en MP3 mono 44,1 kHz
+    // sans balise ID3. Le dossier produit est en clair (.cleartext) et stocké dans la bibliothèque.
+    // ---------------------------------------------------------------------
+    const IMAGE_WIDTH = 320;
+    const IMAGE_HEIGHT = 240;
+    const MP3_SAMPLE_RATE = 44100;
+    const MP3_BITRATE_KBPS = 128;
+    const BLANK_MP3_FRAMES = 8;
+    const LAME_URL = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js';
+    const LAME_INTEGRITY = 'sha384-xuasJXVcyv3hZq0eYpelEkBC8l4yufatZXDsKuyCU2rqfhDCb+ftuE/mSfZAteiK';
+    const ASSETS_PREFIX = 'assets/';
+
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    async function sha1Hex(bytes) {
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', bytes));
+      return Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // ----- Lecture du zip -----
+    async function readZipDirectory(file) {
+      const tailSize = Math.min(file.size, 22 + 65535);
+      const tail = new DataView(await file.slice(file.size - tailSize).arrayBuffer());
+      let eocd = -1;
+      for (let i = tailSize - 22; i >= 0; i--) {
+        if (tail.getUint32(i, true) === 0x06054b50) {
+          eocd = i;
+          break;
+        }
+      }
+      if (eocd < 0) throw new Error("Archive zip invalide.");
+
+      const count = tail.getUint16(eocd + 10, true);
+      const directorySize = tail.getUint32(eocd + 12, true);
+      const directoryOffset = tail.getUint32(eocd + 16, true);
+      if (count === 0xFFFF || directoryOffset === 0xFFFFFFFF) throw new Error("Archive zip64 non supportée.");
+
+      const directory = new DataView(await file.slice(directoryOffset, directoryOffset + directorySize).arrayBuffer());
+      const decoder = new TextDecoder();
+      const entries = new Map();
+      let p = 0;
+      for (let i = 0; i < count; i++) {
+        if (directory.getUint32(p, true) !== 0x02014b50) throw new Error("Répertoire central du zip corrompu.");
+        const nameLength = directory.getUint16(p + 28, true);
+        const extraLength = directory.getUint16(p + 30, true);
+        const commentLength = directory.getUint16(p + 32, true);
+        const name = decoder.decode(new Uint8Array(directory.buffer, p + 46, nameLength));
+        entries.set(name, {
+          name,
+          flags: directory.getUint16(p + 8, true),
+          method: directory.getUint16(p + 10, true),
+          compressedSize: directory.getUint32(p + 20, true),
+          offset: directory.getUint32(p + 42, true)
+        });
+        p += 46 + nameLength + extraLength + commentLength;
+      }
+      return entries;
+    }
+
+    async function readZipEntry(file, entry) {
+      if (entry.flags & 1) throw new Error("Archive zip chiffrée non supportée.");
+      const header = new DataView(await file.slice(entry.offset, entry.offset + 30).arrayBuffer());
+      const start = entry.offset + 30 + header.getUint16(26, true) + header.getUint16(28, true);
+      const compressed = file.slice(start, start + entry.compressedSize);
+      if (entry.method === 0) return new Uint8Array(await compressed.arrayBuffer());
+      if (entry.method === 8) {
+        const stream = compressed.stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+      }
+      throw new Error(`Méthode de compression zip non supportée : ${entry.method}`);
+    }
+
+    function findZipEntryIgnoreCase(entries, name) {
+      return [...entries.values()].find(e => e.name.toLowerCase() === name);
+    }
+
+    // Les nœuds d'étape gardent l'ordre du JSON, "squareOne" (point d'entrée) passe en premier
+    function orderStageNodes(story) {
+      const nodes = [...(story.stageNodes || [])];
+      const squareOne = nodes.find(n => n.squareOne);
+      if (squareOne) {
+        nodes.splice(nodes.indexOf(squareOne), 1);
+        nodes.unshift(squareOne);
+      }
+      if (nodes.length === 0) throw new Error("Aucun nœud d'étape dans story.json.");
+      const uuid = parseUuidFromFolderName(String(nodes[0].uuid));
+      if (!uuid) throw new Error(`UUID du pack invalide : ${nodes[0].uuid}`);
+      return { nodes, uuid };
+    }
+
+    async function readArchiveStory(file) {
+      const entries = await readZipDirectory(file);
+      const storyEntry = findZipEntryIgnoreCase(entries, 'story.json');
+      if (!storyEntry) throw new Error("story.json introuvable dans l'archive.");
+      const text = new TextDecoder().decode(await readZipEntry(file, storyEntry)).replace(/^\uFEFF/, '');
+      return { entries, story: JSON.parse(text) };
+    }
+
+    async function readArchiveMetadata(fileHandle) {
+      const file = await fileHandle.getFile();
+      const { entries, story } = await readArchiveStory(file);
+      const { uuid } = orderStageNodes(story);
+      let coverUrl = null;
+      const thumbnail = findZipEntryIgnoreCase(entries, 'thumbnail.png');
+      if (thumbnail) {
+        coverUrl = createTrackedBlobUrl(new Blob([await readZipEntry(file, thumbnail)], { type: 'image/png' }), localBlobUrls);
+      }
+      return {
+        name: fileHandle.name,
+        handle: fileHandle,
+        uuid,
+        title: typeof story.title === 'string' ? story.title : null,
+        coverUrl
+      };
+    }
+
+    // ----- Images : any -> BMP 320x240, 16 couleurs, RLE4 -----
+    const IMAGE_MIME_BY_EXTENSION = { '.bmp': 'image/bmp', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+    const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.oga'];
+
+    function extensionOf(name) {
+      const dot = name.lastIndexOf('.');
+      return dot < 0 ? '' : name.slice(dot).toLowerCase();
+    }
+
+    // Réduction à 16 couleurs (coupe médiane) puis diffusion d'erreur Floyd-Steinberg en serpentin
+    function quantizeTo16(rgba, width, height) {
+      const pixelCount = width * height;
+      const counts = new Map();
+      for (let i = 0; i < pixelCount; i++) {
+        const key = (rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      const colors = [...counts].map(([key, count]) => ({ r: key >> 16, g: (key >> 8) & 255, b: key & 255, count }));
+
+      let palette;
+      if (colors.length <= 16) {
+        palette = colors.map(c => [c.r, c.g, c.b]);
+      } else {
+        const boxes = [colors];
+        while (boxes.length < 16) {
+          let boxIndex = -1;
+          let bestPopulation = 0;
+          boxes.forEach((box, i) => {
+            const population = box.reduce((sum, c) => sum + c.count, 0);
+            if (box.length > 1 && population > bestPopulation) {
+              bestPopulation = population;
+              boxIndex = i;
+            }
+          });
+          if (boxIndex < 0) break;
+          const box = boxes[boxIndex];
+          const range = ch => {
+            let lo = 255;
+            let hi = 0;
+            for (const c of box) {
+              if (c[ch] < lo) lo = c[ch];
+              if (c[ch] > hi) hi = c[ch];
+            }
+            return hi - lo;
+          };
+          const channel = ['r', 'g', 'b'].reduce((a, b) => (range(b) > range(a) ? b : a));
+          box.sort((a, b) => a[channel] - b[channel]);
+          let accumulated = 0;
+          let cut = 0;
+          while (cut < box.length - 2 && accumulated + box[cut].count < bestPopulation / 2) accumulated += box[cut++].count;
+          boxes.splice(boxIndex, 1, box.slice(0, cut + 1), box.slice(cut + 1));
+        }
+        palette = boxes.map(box => {
+          const total = box.reduce((sum, c) => sum + c.count, 0);
+          return ['r', 'g', 'b'].map(ch => Math.round(box.reduce((sum, c) => sum + c[ch] * c.count, 0) / total));
+        });
+      }
+
+      const working = new Float32Array(pixelCount * 3);
+      for (let i = 0; i < pixelCount; i++) {
+        working[i * 3] = rgba[i * 4];
+        working[i * 3 + 1] = rgba[i * 4 + 1];
+        working[i * 3 + 2] = rgba[i * 4 + 2];
+      }
+      const indices = new Uint8Array(pixelCount);
+      const spread = (x, y, dx, weight, error) => {
+        const nx = x + dx;
+        if (nx < 0 || nx >= width || y >= height) return;
+        const o = (y * width + nx) * 3;
+        for (let c = 0; c < 3; c++) working[o + c] += error[c] * weight;
+      };
+      for (let y = 0; y < height; y++) {
+        const leftToRight = y % 2 === 0;
+        const direction = leftToRight ? 1 : -1;
+        for (let step = 0; step < width; step++) {
+          const x = leftToRight ? step : width - 1 - step;
+          const o = (y * width + x) * 3;
+          const value = [0, 1, 2].map(c => Math.min(255, Math.max(0, working[o + c])));
+          let best = 0;
+          let bestDistance = Infinity;
+          for (let i = 0; i < palette.length; i++) {
+            const dr = value[0] - palette[i][0];
+            const dg = value[1] - palette[i][1];
+            const db = value[2] - palette[i][2];
+            const distance = dr * dr + dg * dg + db * db;
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              best = i;
+            }
+          }
+          indices[y * width + x] = best;
+          const error = [0, 1, 2].map(c => value[c] - palette[best][c]);
+          spread(x, y, direction, 7 / 16, error);
+          spread(x, y + 1, -direction, 3 / 16, error);
+          spread(x, y + 1, 0, 5 / 16, error);
+          spread(x, y + 1, direction, 1 / 16, error);
+        }
+      }
+      return { palette, indices };
+    }
+
+    function encodeRle4Row(out, row) {
+      const width = row.length;
+      let x = 0;
+      while (x < width) {
+        let run = 1;
+        while (x + run < width && row[x + run] === row[x] && run < 255) run++;
+        if (run >= 3) {
+          out.push(run, (row[x] << 4) | row[x]);
+          x += run;
+          continue;
+        }
+        // Pixels isolés : mode absolu, jusqu'à la prochaine suite de 4 pixels identiques
+        let end = x;
+        while (end < width && end - x < 255) {
+          let ahead = 1;
+          while (end + ahead < width && row[end + ahead] === row[end] && ahead < 4) ahead++;
+          if (ahead >= 4) break;
+          end++;
+        }
+        const literal = end - x;
+        if (literal < 3) {
+          if (literal === 1) out.push(1, row[x] << 4);
+          else out.push(2, (row[x] << 4) | row[x + 1]);
+        } else {
+          out.push(0, literal);
+          for (let i = 0; i < literal; i += 2) out.push((row[x + i] << 4) | (i + 1 < literal ? row[x + i + 1] : 0));
+          if (Math.ceil(literal / 2) % 2 === 1) out.push(0);
+        }
+        x = end;
+      }
+    }
+
+    function encodeRle4Bmp(width, height, palette, indices) {
+      const data = [];
+      for (let y = height - 1; y >= 0; y--) {
+        encodeRle4Row(data, indices.subarray(y * width, (y + 1) * width));
+        data.push(0, y === 0 ? 1 : 0);
+      }
+      const headerSize = 14 + 40 + 16 * 4;
+      const out = new Uint8Array(headerSize + data.length);
+      const view = new DataView(out.buffer);
+      out[0] = 0x42;
+      out[1] = 0x4D;
+      view.setUint32(2, out.length, true);
+      view.setUint32(10, headerSize, true);
+      view.setUint32(14, 40, true);
+      view.setInt32(18, width, true);
+      view.setInt32(22, height, true);
+      view.setUint16(26, 1, true);
+      view.setUint16(28, 4, true);
+      view.setUint32(30, 2, true); // BI_RLE4
+      view.setUint32(34, data.length, true);
+      view.setInt32(38, 2835, true);
+      view.setInt32(42, 2835, true);
+      view.setUint32(46, 16, true);
+      view.setUint32(50, 16, true);
+      for (let i = 0; i < 16; i++) {
+        const [r, g, b] = palette[i] || [0, 0, 0];
+        out.set([b, g, r, 0], 54 + i * 4);
+      }
+      out.set(data, headerSize);
+      return out;
+    }
+
+    async function convertImageToRle4Bmp(bytes, mime) {
+      // Déjà au bon format (BMP 4 bits / RLE)
+      if (mime === 'image/bmp' && bytes[28] === 4 && bytes[30] === 2) return bytes;
+
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+      const canvas = document.createElement('canvas');
+      canvas.width = IMAGE_WIDTH;
+      canvas.height = IMAGE_HEIGHT;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      // Fond noir : supprime la transparence
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT);
+      // Une image qui n'est pas en 320x240 est ajustée (le Java refuse ces images)
+      const scale = Math.min(IMAGE_WIDTH / bitmap.width, IMAGE_HEIGHT / bitmap.height);
+      const drawWidth = Math.round(bitmap.width * scale);
+      const drawHeight = Math.round(bitmap.height * scale);
+      context.drawImage(bitmap, (IMAGE_WIDTH - drawWidth) >> 1, (IMAGE_HEIGHT - drawHeight) >> 1, drawWidth, drawHeight);
+      bitmap.close();
+
+      const { data } = context.getImageData(0, 0, IMAGE_WIDTH, IMAGE_HEIGHT);
+      const { palette, indices } = quantizeTo16(data, IMAGE_WIDTH, IMAGE_HEIGHT);
+      return encodeRle4Bmp(IMAGE_WIDTH, IMAGE_HEIGHT, palette, indices);
+    }
+
+    // ----- Sons : any -> MP3 mono 44,1 kHz sans ID3 -----
+    function stripId3Tags(bytes) {
+      let result = bytes;
+      if (result.length > 10 && result[0] === 0x49 && result[1] === 0x44 && result[2] === 0x33) {
+        const size = ((result[6] & 0x7f) << 21) | ((result[7] & 0x7f) << 14) | ((result[8] & 0x7f) << 7) | (result[9] & 0x7f);
+        result = result.subarray(size + 10);
+      }
+      if (result.length > 128 && result[result.length - 128] === 0x54 && result[result.length - 127] === 0x41 && result[result.length - 126] === 0x47) {
+        result = result.subarray(0, result.length - 128);
+      }
+      return result;
+    }
+
+    function parseMp3Header(bytes) {
+      for (let i = 0; i + 4 <= Math.min(bytes.length, 65536); i++) {
+        if (bytes[i] !== 0xFF || (bytes[i + 1] & 0xE0) !== 0xE0) continue;
+        const versionBits = (bytes[i + 1] >> 3) & 3;
+        const layerBits = (bytes[i + 1] >> 1) & 3;
+        const rateIndex = (bytes[i + 2] >> 2) & 3;
+        if (versionBits === 1 || layerBits === 0 || rateIndex === 3) continue;
+        const rates = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] }[versionBits];
+        return { layer: 4 - layerBits, sampleRate: rates[rateIndex], channels: ((bytes[i + 3] >> 6) & 3) === 3 ? 1 : 2 };
+      }
+      return null;
+    }
+
+    // Silence : trames MPEG-1 Layer III 128 kbps mono 44,1 kHz dont le contenu est nul
+    function createBlankMp3() {
+      const frameSize = 417;
+      const out = new Uint8Array(frameSize * BLANK_MP3_FRAMES);
+      for (let i = 0; i < BLANK_MP3_FRAMES; i++) out.set([0xFF, 0xFB, 0x90, 0xC4], i * frameSize);
+      return out;
+    }
+
+    let lamePromise = null;
+    function loadLame() {
+      if (!lamePromise) {
+        lamePromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = LAME_URL;
+          script.integrity = LAME_INTEGRITY;
+          script.crossOrigin = 'anonymous';
+          script.onload = resolve;
+          script.onerror = () => {
+            lamePromise = null;
+            reject(new Error("Impossible de charger l'encodeur MP3 (lamejs) : connexion requise."));
+          };
+          document.head.appendChild(script);
+        });
+      }
+      return lamePromise;
+    }
+
+    async function decodeToMono44100(bytes) {
+      // decodeAudioData ré-échantillonne à la fréquence du contexte
+      const context = new OfflineAudioContext(1, 1, MP3_SAMPLE_RATE);
+      const buffer = await context.decodeAudioData(bytes.slice().buffer);
+      const mono = new Float32Array(buffer.length);
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        const channel = buffer.getChannelData(c);
+        for (let i = 0; i < mono.length; i++) mono[i] += channel[i] / buffer.numberOfChannels;
+      }
+      return mono;
+    }
+
+    async function encodeMp3(samples) {
+      await loadLame();
+      const encoder = new lamejs.Mp3Encoder(1, MP3_SAMPLE_RATE, MP3_BITRATE_KBPS);
+      const pcm = new Int16Array(samples.length);
+      for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      const chunks = [];
+      const block = 1152 * 16;
+      for (let i = 0; i < pcm.length; i += block) {
+        const encoded = encoder.encodeBuffer(pcm.subarray(i, i + block));
+        if (encoded.length) chunks.push(new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.length));
+        if ((i / block) % 10 === 9) await tick();
+      }
+      const end = encoder.flush();
+      if (end.length) chunks.push(new Uint8Array(end.buffer, end.byteOffset, end.length));
+      return concatBytes(...chunks);
+    }
+
+    async function convertAudioToMp3(bytes, extension) {
+      let source = bytes;
+      if (extension === '.mp3') {
+        source = stripId3Tags(bytes);
+        const header = parseMp3Header(source);
+        if (header && header.layer === 3 && header.sampleRate === MP3_SAMPLE_RATE && header.channels === 1) return source;
+      }
+      return encodeMp3(await decodeToMono44100(source));
+    }
+
+    // ----- Écriture du dossier FS (FsStoryPackWriter) -----
+    async function writeFileAt(rootDir, pathParts, bytes) {
+      let dir = rootDir;
+      for (const part of pathParts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
+      await writeBytes(await dir.getFileHandle(pathParts[pathParts.length - 1], { create: true }), bytes);
+    }
+
+    const assetPathFromIndex = index => `000\\${String(index).padStart(8, '0')}`;
+
+    async function convertArchiveToFsFolder(archive) {
+      const file = await archive.handle.getFile();
+      const { entries, story } = await readArchiveStory(file);
+      const { nodes, uuid } = orderStageNodes(story);
+
+      const actionNodes = new Map((story.actionNodes || []).map(a => [a.id, a]));
+      const nodeIndexByUuid = new Map(nodes.map((n, i) => [n.uuid, i]));
+      const referencedAssets = new Set(nodes.flatMap(n => [n.image, n.audio]).filter(Boolean));
+      let processed = 0;
+
+      // Préparation des ressources, une seule fois par fichier
+      const prepared = new Map();
+      const prepareAsset = async (name, kind) => {
+        const key = `${kind}:${name}`;
+        if (prepared.has(key)) return prepared.get(key);
+        const extension = extensionOf(name);
+        const supported = kind === 'image' ? extension in IMAGE_MIME_BY_EXTENSION : AUDIO_EXTENSIONS.includes(extension);
+        const entry = entries.get(ASSETS_PREFIX + name);
+        let result = null;
+        if (supported && entry) {
+          setStatus(`Conversion ${kind === 'image' ? 'image' : 'son'} ${++processed}/${referencedAssets.size} : ${name}`);
+          const raw = await readZipEntry(file, entry);
+          const bytes = kind === 'image'
+            ? await convertImageToRle4Bmp(raw, IMAGE_MIME_BY_EXTENSION[extension])
+            : await convertAudioToMp3(raw, extension);
+          result = { hash: await sha1Hex(bytes), bytes };
+        }
+        prepared.set(key, result);
+        return result;
+      };
+
+      const images = [];
+      const sounds = [];
+      const imageIndexByHash = new Map();
+      const soundIndexByHash = new Map();
+      const addAsset = (list, indexByHash, asset) => {
+        if (!indexByHash.has(asset.hash)) {
+          indexByHash.set(asset.hash, list.length);
+          list.push(asset.bytes);
+        }
+        return indexByHash.get(asset.hash);
+      };
+
+      const orderedActions = [];
+      const actionPositions = new Map();
+      let nextActionPosition = 0;
+      const registerAction = transition => {
+        if (!transition || transition.actionNode == null) return;
+        const id = transition.actionNode;
+        if (!actionNodes.has(id)) throw new Error(`Nœud d'action introuvable : ${id}`);
+        if (!actionPositions.has(id)) {
+          actionPositions.set(id, nextActionPosition);
+          orderedActions.push(actionNodes.get(id));
+          nextActionPosition += actionNodes.get(id).options.length;
+        }
+      };
+
+      const blankAudio = { hash: await sha1Hex(createBlankMp3()), bytes: createBlankMp3() };
+      const ni = new Uint8Array(512 + 44 * nodes.length);
+      const niView = new DataView(ni.buffer);
+
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const image = node.image ? await prepareAsset(node.image, 'image') : null;
+        if (image) {
+          const view = new DataView(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength);
+          if (view.getUint16(28, true) !== 4 || view.getUint32(30, true) !== 2) throw new Error(`Image ${node.image} : BMP 4 bits / RLE requis.`);
+          if (view.getInt32(18, true) !== IMAGE_WIDTH || view.getInt32(22, true) !== IMAGE_HEIGHT) throw new Error(`Image ${node.image} : 320x240 pixels requis.`);
+        }
+        // Un nœud sans son reçoit un silence pour satisfaire l'appareil
+        const audio = (node.audio ? await prepareAsset(node.audio, 'audio') : null) || blankAudio;
+
+        registerAction(node.okTransition);
+        registerAction(node.homeTransition);
+
+        const o = 512 + i * 44;
+        const transition = t => (t && t.actionNode != null
+          ? [actionPositions.get(t.actionNode), actionNodes.get(t.actionNode).options.length, t.optionIndex]
+          : [-1, -1, -1]);
+        const fields = [
+          image ? addAsset(images, imageIndexByHash, image) : -1,
+          addAsset(sounds, soundIndexByHash, audio),
+          ...transition(node.okTransition),
+          ...transition(node.homeTransition)
+        ];
+        fields.forEach((value, k) => niView.setInt32(o + k * 4, value, true));
+        const controls = node.controlSettings || {};
+        [controls.wheel, controls.ok, controls.home, controls.pause, controls.autoplay].forEach((flag, k) => niView.setInt16(o + 32 + k * 2, flag ? 1 : 0, true));
+        await tick();
+      }
+
+      // En-tête de ni
+      niView.setInt16(0, 1, true);
+      niView.setInt16(2, Number(story.version) || 0, true);
+      niView.setInt32(4, 512, true);
+      niView.setInt32(8, 44, true);
+      niView.setInt32(12, nodes.length, true);
+      niView.setInt32(16, images.length, true);
+      niView.setInt32(20, sounds.length, true);
+      ni[24] = 1;
+
+      const li = new Uint8Array(nextActionPosition * 4);
+      const liView = new DataView(li.buffer);
+      let position = 0;
+      for (const action of orderedActions) {
+        for (const optionUuid of action.options) {
+          liView.setInt32(position * 4, nodeIndexByUuid.has(optionUuid) ? nodeIndexByUuid.get(optionUuid) : -1, true);
+          position++;
+        }
+      }
+
+      const encoder = new TextEncoder();
+      const buildIndex = list => concatBytes(...list.map((_, i) => encoder.encode(assetPathFromIndex(i))));
+
+      setStatus('Écriture du dossier converti...');
+      const folderName = `${uuid}.converted_${Date.now()}`;
+      const packDir = await localDirHandle.getDirectoryHandle(folderName, { create: true });
+      try {
+        if (story.nightModeAvailable) await writeFileAt(packDir, [NIGHT_MODE_FILENAME], new Uint8Array(0));
+        await writeFileAt(packDir, [CLEARTEXT_FILENAME], new Uint8Array(0));
+        await writeFileAt(packDir, [NODE_INDEX_FILENAME], ni);
+        await writeFileAt(packDir, ['li'], li);
+        await writeFileAt(packDir, [IMAGE_INDEX_FILENAME], buildIndex(images));
+        await writeFileAt(packDir, ['si'], buildIndex(sounds));
+        for (let i = 0; i < images.length; i++) await writeFileAt(packDir, ['rf', '000', assetPathFromIndex(i).slice(4)], images[i]);
+        for (let i = 0; i < sounds.length; i++) await writeFileAt(packDir, ['sf', '000', assetPathFromIndex(i).slice(4)], sounds[i]);
+      } catch (e) {
+        try { await localDirHandle.removeEntry(folderName, { recursive: true }); } catch {}
+        throw e;
+      }
+      return packDir;
     }
 
     // ----- Etat de l'interface -----

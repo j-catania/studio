@@ -433,7 +433,38 @@ Une archive `.zip` décrit le même graphe en JSON (`story.json`) :
 | `stageNodes[]` | `uuid`, `squareOne` (point d'entrée), `image`, `audio` (noms dans `assets/`), `okTransition` et `homeTransition` (`actionNode`, `optionIndex`), `controlSettings` (`wheel`, `ok`, `home`, `pause`, `autoplay`). |
 | `actionNodes[]` | `id` et `options[]` (liste d'UUID de nœuds d'étape). |
 
-La conversion vers le format dossier est ce que ne fait **pas** encore l'application web : elle ne transfère que des dossiers déjà au format FS.
+### 7.1 Règles de conversion `.zip` vers dossier FS
+
+L'application web reproduit la conversion du Java (`ArchiveStoryPackReader`, `PackAssetsCompression.withPreparedAssetsFirmware2dot4`, `FsStoryPackWriter`) :
+
+```mermaid
+flowchart TD
+    Z["story.json + assets/"] --> O["Ordonner les nœuds :<br/>squareOne en premier, sinon ordre du JSON"]
+    O --> UU["UUID du pack = UUID du nœud 0"]
+    O --> IMG["Image du nœud"]
+    O --> SND["Son du nœud"]
+    IMG --> I1{"BMP 4 bits RLE ?"}
+    I1 -->|oui| I3["Conservée telle quelle"]
+    I1 -->|non| I2["Fond noir, ajustée à 320x240,<br/>16 couleurs + dithering, BMP RLE4"]
+    SND --> S0{"Absent ?"}
+    S0 -->|oui| S1["MP3 de silence"]
+    S0 -->|non| S2{"MP3 mono 44,1 kHz ?"}
+    S2 -->|oui| S3["Balises ID3 retirées"]
+    S2 -->|non| S4["Décodage, mono, 44,1 kHz, encodage MP3"]
+    I2 --> D["Dédoublonnage par SHA-1"]
+    I3 --> D
+    S1 --> D
+    S3 --> D
+    S4 --> D
+    D --> W["Écriture ni, li, ri, si, rf/, sf/, nm, .cleartext"]
+```
+
+Points propres à l'implémentation web :
+
+- Une image qui n'est pas en 320×240 est ajustée avec des bandes noires, alors que le Java la refuse.
+- Le nombre de sons annoncé dans `ni` compte le silence inséré, alors que le Java ne compte que les sons explicites.
+- Le silence est composé de 8 trames MPEG-1 Layer III à contenu nul (environ 0,2 s).
+- La palette est calculée par coupe médiane, alors que le Java utilise un quantificateur à octree. Le résultat est équivalent mais pas identique octet pour octet.
 
 ---
 

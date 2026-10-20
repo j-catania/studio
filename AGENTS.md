@@ -7,7 +7,7 @@ Ce document décrit les contraintes techniques, les choix d'architecture et les 
 ## 1. Principes d'architecture
 
 - **Zéro backend :** Tout le code doit s'exécuter strictement côté client dans le navigateur. Ne jamais introduire de dépendance nécessitant un runtime serveur (Node.js, Bun, Python, Go) à l'exécution.
-- **Zéro bundler obligatoire :** Conserver la capacité de tester et distribuer le projet via un fichier HTML autonome intégrant le CSS (via Tailwind CDN) et les modules JavaScript natifs (ESM).
+- **Zéro bundler obligatoire :** Conserver la capacité de tester et distribuer le projet via un fichier HTML autonome intégrant le CSS (via Tailwind CDN) et les modules JavaScript natifs (ESM). Seule dépendance externe en dehors de Tailwind : l'encodeur MP3 `lamejs`, chargé à la demande depuis un CDN avec contrôle d'intégrité, uniquement pour convertir les sons d'une archive `.zip`.
 - **API système :** Tous les accès aux disques (PC et Lunii) doivent passer par la spécification standard **File System Access API** (`window.showDirectoryPicker`, `FileSystemDirectoryHandle`, `FileSystemFileHandle`).
 
 ---

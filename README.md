@@ -62,7 +62,12 @@ La bibliothèque PC contient un dossier par pack, nommé `<uuid>` (ou `<uuid>.su
 - **Firmware 2.x :** les 512 premiers octets de chaque fichier sont chiffrés en XXTEA (clé commune) ; le fichier `bt` est dérivé de la clé de l'appareil.
 - **Firmware 3.x :** les 512 premiers octets sont chiffrés en AES-CBC avec la clé de l'appareil lue dans `.md` ; `bt` provient de `.md`.
 - **Sauvegarde Lunii → PC :** les fichiers sont déchiffrés dans un dossier `<uuid>` de la bibliothèque.
-- Les archives `.zip` / `.pack` de la bibliothèque ne sont pas transférables (conversion non portée) ; seuls les packs au format dossier le sont.
+- **Archives `.zip` (`story.json` + `assets/`) :** converties à la volée en dossier FS, comme dans STUdio. Le bouton **Convertir** écrit le dossier `<uuid>.converted_<horodatage>` dans la bibliothèque, **Installer** convertit puis transfère.
+  - Images : ajustées dans 320×240, réduites à 16 couleurs (diffusion d'erreur) et encodées en BMP 4 bits RLE.
+  - Sons : MP3 mono 44,1 kHz sans balises ID3 conservés tels quels ; WAV / OGG / autres MP3 décodés puis ré-encodés en MP3 (128 kbit/s).
+  - Un nœud sans son reçoit un court silence.
+  - L'encodeur MP3 [lamejs](https://github.com/zhuker/lamejs) est chargé depuis un CDN (avec contrôle d'intégrité) au premier besoin : une connexion est alors requise.
+- Les fichiers `.pack` (format binaire brut) ne sont pas pris en charge.
 
 ---
 
